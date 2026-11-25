@@ -4,3 +4,4 @@ __pycache__/
 dataset/
 flagged/
 .gradio/
+_site/

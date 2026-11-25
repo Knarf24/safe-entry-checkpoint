@@ -4,12 +4,15 @@ Combines four GeeksforGeeks Python projects:
   * Face detection with OpenCV        -> YuNet face detector (cv2.FaceDetectorYN)
   * Count number of faces             -> len(faces)
   * Face mask detection               -> MobileNetV2 features + trained mask head
-  * Convert text to speech            -> gTTS
+  * Convert text to speech            -> browser voice (in the web app) or gTTS
+
+Runs in the browser through Pyodide, and also on a normal Python install.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from dataclasses import dataclass, field
 
@@ -146,8 +149,18 @@ def draw(rgb: np.ndarray, faces: list[Face], mask_required: bool) -> np.ndarray:
 
 
 def speak(text: str, lang: str = "en") -> str | None:
-    """Text to speech with gTTS. Returns an mp3 path, or None if it fails (offline)."""
-    if os.environ.get("SEC_DISABLE_GTTS"):
+    """Say the result out loud.
+
+    In the browser (Pyodide) Python calls the browser's built-in voice directly.
+    On a normal computer it uses gTTS and returns the path of an mp3 file.
+    """
+    if sys.platform == "emscripten":
+        import js  # Pyodide bridge to the web page
+
+        js.window.speechSynthesis.cancel()
+        utterance = js.SpeechSynthesisUtterance.new(text)
+        utterance.lang = "en-US" if lang == "en" else lang
+        js.window.speechSynthesis.speak(utterance)
         return None
     try:
         from gtts import gTTS
