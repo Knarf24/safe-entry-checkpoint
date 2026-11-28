@@ -11,22 +11,26 @@ let py = null, door = null, stream = null, mode = "cam", uploaded = null;
 
 function setLoading(text) { $("loadText").textContent = text; }
 
+// The page is usable right away (camera, upload); Python, OpenCV and the models load in the background,
+// all at the same time, and a check started before they are ready waits for them.
 async function startPython() {
   try {
-    setLoading("Starting Python…");
-    py = await loadPyodide({ indexURL: new URL("pyodide/", location.href).href });
+    const files = Promise.all([...PY_FILES, ...MODEL_FILES].map(async (f) => {
+      const r = await fetch(f);
+      if (!r.ok) throw new Error(`Could not load ${f}`);
+      return [f, new Uint8Array(await r.arrayBuffer())];
+    }));
+    files.catch(() => {}); // reported below
+    py = await loadPyodideFast();
     setLoading("Loading OpenCV and NumPy…");
     await py.loadPackage(["numpy", "opencv-python"]);
     setLoading("Loading the face and mask models…");
     py.FS.mkdirTree("/home/pyodide/models");
-    await Promise.all([...PY_FILES, ...MODEL_FILES].map(async (f) => {
-      const r = await fetch(f);
-      if (!r.ok) throw new Error(`Could not load ${f}`);
-      py.FS.writeFile(`/home/pyodide/${f}`, new Uint8Array(await r.arrayBuffer()));
-    }));
+    for (const [f, bytes] of await files) py.FS.writeFile(`/home/pyodide/${f}`, bytes);
     setLoading("Getting the checkpoint ready…");
     door = py.pyimport("door");
     $("loading").classList.add("done");
+    document.documentElement.dataset.py = "ready";
     updateReady();
   } catch (e) {
     console.error(e);
@@ -34,11 +38,13 @@ async function startPython() {
     setLoading("Sorry, Python could not start in this browser. Try Chrome, Edge or Firefox. (" + e.message + ")");
     document.querySelector(".spinner").style.display = "none";
   }
+  // Keeps Python saved on this device so the next visit starts without downloading it (see sw.js).
+  if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 
 function updateReady() {
   const haveImage = mode === "cam" ? !!stream : !!uploaded;
-  $("checkBtn").disabled = !(door && haveImage);
+  $("checkBtn").disabled = !haveImage || $("loading").classList.contains("error");
 }
 
 async function startCamera() {
@@ -106,9 +112,13 @@ function showLog(rows) {
 
 async function checkEntry() {
   $("checkBtn").disabled = true;
-  $("checkBtn").textContent = "Checking…";
+  $("checkBtn").textContent = door ? "Checking…" : "Getting the checkpoint ready…";
   await new Promise((r) => setTimeout(r, 30)); // let the button repaint
   try {
+    await pyReady;
+    if (!door) throw new Error("Python could not start");
+    $("checkBtn").textContent = "Checking…";
+    await new Promise((r) => setTimeout(r, 30));
     const { data, w, h } = grabFrame();
     const res = door.check(data, w, h, parseInt($("capacity").value) || 1, $("maskReq").checked, $("voice").checked);
     const [pixels, json] = res.toJs();
@@ -158,4 +168,5 @@ $("resetBtn").onclick = () => {
 };
 $("capacity").oninput = () => showOccupancy(parseInt($("inside").textContent) || 0);
 
-startPython();
+const pyReady = startPython();
+document.documentElement.dataset.ui = "ready";
